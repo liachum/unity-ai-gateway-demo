@@ -60,24 +60,28 @@ from mlflow.deployments import get_deploy_client
 client = get_deploy_client("databricks")
 EXTERNAL_ENDPOINT = "external-gpt-4o"
 
+# Full request payload passed as a single dict (name included) per the current SDK contract.
 config = {
-    "served_entities": [
-        {
-            "name": "gpt-4o",
-            "external_model": {
+    "name": EXTERNAL_ENDPOINT,
+    "config": {
+        "served_entities": [
+            {
                 "name": "gpt-4o",
-                "provider": "openai",
-                "task": "llm/v1/chat",
-                "openai_config": {
-                    "openai_api_key": f"{{{{secrets/{SECRET_SCOPE}/openai_api_key}}}}"
+                "external_model": {
+                    "name": "gpt-4o",
+                    "provider": "openai",
+                    "task": "llm/v1/chat",
+                    "openai_config": {
+                        "openai_api_key": f"{{{{secrets/{SECRET_SCOPE}/openai_api_key}}}}"
+                    },
                 },
-            },
-        }
-    ]
+            }
+        ]
+    },
 }
 
 try:
-    client.create_endpoint(name=EXTERNAL_ENDPOINT, config=config)
+    client.create_endpoint(config=config)
 except Exception as e:
     print(f"Endpoint exists or creation skipped: {e}")
 
@@ -107,6 +111,11 @@ from databricks.sdk import WorkspaceClient
 
 hosted = [e.name for e in WorkspaceClient().serving_endpoints.list()
           if (e.name or "").startswith("databricks-")]
+if not hosted:
+    raise RuntimeError(
+        "No Databricks-hosted (databricks-*) serving endpoints found. "
+        "Enable Foundation Model APIs for this workspace and re-run."
+    )
 HOSTED_ENDPOINT = next((n for n in hosted if "llama" in n), hosted[0])
 print("Using:", HOSTED_ENDPOINT)
 
@@ -147,6 +156,19 @@ resp = requests.put(
     headers={"Authorization": f"Bearer {DATABRICKS_TOKEN}"},
     json=gateway_config,
 )
+
+# Re-runs: the inference (payload logging) table persists from a prior run, and the API rejects
+# reusing an existing table prefix. Fall back to logging with a fresh timestamped prefix so the
+# notebook is safe to run repeatedly.
+if resp.status_code == 400 and "already exists" in resp.text:
+    import time
+    gateway_config["inference_table_config"]["table_name_prefix"] = f"external_gpt_4o_{int(time.time())}"
+    resp = requests.put(
+        f"https://{WORKSPACE_URL}/api/2.0/serving-endpoints/{EXTERNAL_ENDPOINT}/ai-gateway",
+        headers={"Authorization": f"Bearer {DATABRICKS_TOKEN}"},
+        json=gateway_config,
+    )
+
 resp.raise_for_status()
 print("Governance applied:", list(resp.json().keys()))
 
@@ -197,8 +219,8 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=60) as ex:
 # MAGIC %md
 # MAGIC ## 5. Observe usage
 # MAGIC Traffic is attributed per endpoint in the billing system tables. Logged request/response
-# MAGIC payloads land in the inference table (`{CATALOG}.{SCHEMA}.external_gpt_4o_payload`) on an
-# MAGIC asynchronous schedule.
+# MAGIC payloads land in the inference table `<CATALOG>.<SCHEMA>.external_gpt_4o_payload` on an
+# MAGIC asynchronous schedule (rows can take several minutes to appear after traffic).
 
 # COMMAND ----------
 
