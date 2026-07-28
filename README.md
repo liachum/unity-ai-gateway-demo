@@ -64,6 +64,30 @@ then turns on the governance that applies to all traffic through it:
   [External models in Model Serving](https://docs.databricks.com/aws/en/machine-learning/foundation-models/external-models)
   for each provider's config.
 
+## FAQ: can I apply guardrails/policies to an *agent* (Genie, Agent Bricks)?
+
+**Short answer: not directly, today.** Unity AI Gateway service policies and guardrails attach to
+**model services, tools/MCP services, and model-provider services** — not to managed agents. So you can't
+attach a PII or safety guardrail to a **Genie Agent** (formerly *Genie Space*) or an **Agent Bricks** agent
+itself, and those managed agents don't expose the underlying model for you to govern directly. Agent-level
+policy enforcement is on the roadmap (no committed date at time of writing).
+
+You still have real governance for a managed agent you don't control:
+
+- **Data layer — the strongest lever for PII.** Genie Agents automatically enforce Unity Catalog
+  **column masks and row filters, per user, even when the space is shared.** Mask or redact PII on the
+  underlying tables and that protection applies to every user of the agent — no model access required.
+  See [Row filters and column masks](https://docs.databricks.com/aws/en/data-governance/unity-catalog/row-and-column-filters).
+- **Tool / MCP layer.** Any tools or MCP services the agent calls can have
+  [service policies](https://docs.databricks.com/aws/en/data-governance/unity-catalog/service-policies/)
+  and guardrails attached, which fire on every call the agent makes to them.
+- **Custom agents.** If you build your own agent (rather than using managed Genie / Agent Bricks) and route
+  its LLM calls through the gateway, guardrails apply normally — the model service it calls is governed like
+  any other in this notebook.
+
+For managed Genie / Agent Bricks agents today: govern the **data** (UC masks/filters) and the **tools**
+(service policies); agent-level policy attachment is coming later.
+
 ## Cleanup
 
 ```python
